@@ -10,6 +10,7 @@ import (
 	"github.com/argoproj/argo-workflows/v3/workflow/common"
 
 	"github.com/argoproj/argo-workflows/v3/cmd/argoexec/executor"
+	"github.com/argoproj/argo-workflows/v3/workflow/executor/tracing"
 )
 
 func NewResourceCommand() *cobra.Command {
@@ -31,10 +32,11 @@ func NewResourceCommand() *cobra.Command {
 //nolint:contextcheck
 func execResource(ctx context.Context, action string) error {
 	wfExecutor := executor.Init(ctx, clientConfig, varRunArgo)
+	ctx = tracing.InjectTraceContext(ctx)
 
 	// Don't allow cancellation to impact capture of results, parameters, artifacts, or defers.
 	//nolint:contextcheck
-	bgCtx := logging.RequireLoggerFromContext(ctx).NewBackgroundContext()
+	bgCtx := tracing.InjectTraceContext(logging.RequireLoggerFromContext(ctx).NewBackgroundContext())
 
 	wfExecutor.InitializeOutput(bgCtx)
 	errHandler := wfExecutor.HandleError(bgCtx)

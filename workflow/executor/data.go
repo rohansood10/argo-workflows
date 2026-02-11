@@ -11,12 +11,16 @@ import (
 )
 
 func (we *WorkflowExecutor) Data(ctx context.Context) error {
+	dataCtx, span := we.Tracing.StartProcessDataTemplate(ctx)
+
 	dataTemplate := we.Template.Data
 	if dataTemplate == nil {
+		span.End()
 		return fmt.Errorf("no data template found")
 	}
 
-	transformedData, err := data.ProcessData(ctx, dataTemplate, newExecutorDataSourceProcessor(we))
+	transformedData, err := data.ProcessData(dataCtx, dataTemplate, newExecutorDataSourceProcessor(we))
+	span.End()
 	if err != nil {
 		return fmt.Errorf("unable to process data template: %w", err)
 	}

@@ -5,9 +5,11 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/argoproj/argo-workflows/v3/cmd/argoexec/executor"
 	"github.com/argoproj/argo-workflows/v3/util/logging"
+	"github.com/argoproj/argo-workflows/v3/workflow/executor/tracing"
 )
 
 func NewDataCommand() *cobra.Command {
@@ -28,10 +30,12 @@ func NewDataCommand() *cobra.Command {
 //nolint:contextcheck
 func execData(ctx context.Context) error {
 	wfExecutor := executor.Init(ctx, clientConfig, varRunArgo)
+	ctx = tracing.InjectTraceContext(ctx)
+	span := trace.SpanFromContext(ctx)
 
 	// Don't allow cancellation to impact capture of results, parameters, artifacts, or defers.
 	//nolint:contextcheck
-	bgCtx := logging.RequireLoggerFromContext(ctx).NewBackgroundContext()
+	bgCtx := trace.ContextWithSpan(logging.RequireLoggerFromContext(ctx).NewBackgroundContext(), span)
 	// Create a new empty (placeholder) task result with LabelKeyReportOutputsCompleted set to false.
 	errHandler := wfExecutor.HandleError(bgCtx)
 	defer errHandler()
