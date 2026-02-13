@@ -130,6 +130,7 @@ func NewTracing(ctx context.Context, serviceName string, extraOpts ...tracesdk.T
 		}
 	}
 
+	options = append(options, tracesdk.WithIDGenerator(&DeterministicIDGenerator{}))
 	provider := tracesdk.NewTracerProvider(options...)
 	otel.SetTracerProvider(provider)
 

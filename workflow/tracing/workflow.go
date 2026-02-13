@@ -11,6 +11,7 @@ import (
 	wfv1 "github.com/argoproj/argo-workflows/v3/pkg/apis/workflow/v1alpha1"
 	"github.com/argoproj/argo-workflows/v3/util/logging"
 	"github.com/argoproj/argo-workflows/v3/util/telemetry"
+	"github.com/argoproj/argo-workflows/v3/util/wfcontext"
 )
 
 func workflowID(name, namespace string) string {
@@ -98,8 +99,10 @@ func (trc *Tracing) RecordStartWorkflow(ctx context.Context, name, namespace str
 		logger.Info(ctx, "Trace StartWorkflow failed")
 		return ctx
 	}
+	traceID := telemetry.DeterministicTraceID(wfcontext.UIDList(ctx)...)
+	spanID := telemetry.DeterministicSpanID(wfcontext.UIDList(ctx)...)
 	ctx = trace.ContextWithRemoteSpanContext(ctx, trace.SpanContext{}.WithTraceState(ts))
-	ctx, span := trc.StartWorkflow(ctx, name, namespace)
+	ctx, span := trc.StartWorkflow(ctx, traceID, spanID, name, namespace)
 
 	debugTrace(ctx, "start", &span)
 	spans.workflow = &span
@@ -120,7 +123,8 @@ func (trc *Tracing) ChangeWorkflowPhase(ctx context.Context, name, namespace str
 		(*wf.phase).End()
 		debugTrace(ctx, "end wf phase", wf.phase)
 	}
-	_, newSpan := trc.StartWorkflowPhase(ctx, string(phase))
+	spanID := telemetry.DeterministicSpanID(name, namespace, string(phase))
+	_, newSpan := trc.StartWorkflowPhase(ctx, spanID, string(phase))
 	debugTrace(ctx, "start", &newSpan)
 	wf.phase = &newSpan
 	trc.updateWorkflow(id, wf)
@@ -197,7 +201,8 @@ func (trc *Tracing) RecordStartNode(ctx context.Context, name, namespace string,
 		logger.WithError(err).Error(ctx, "create node failed")
 		return ctx
 	}
-	nodeCtx, span := trc.StartNode(ctx, nodeID, name, namespace, nodeType)
+	spanID := telemetry.DeterministicSpanID(nodeID)
+	nodeCtx, span := trc.StartNode(ctx, spanID, nodeID, name, namespace, nodeType)
 	debugTrace(nodeCtx, "start", &span)
 	node.node = &span
 	wf.updateNode(nodeID, node)
@@ -250,7 +255,8 @@ func (trc *Tracing) ChangeNodePhase(ctx context.Context, wfID string, nodeID str
 	if phase.Fulfilled(nil) {
 		trc.EndNode(ctx, wfID, nodeID, phase)
 	} else {
-		_, span := trc.StartNodePhase(ctx, nodeID, string(phase), spanOpts...)
+		spanID := telemetry.DeterministicSpanID(nodeID, string(phase))
+		_, span := trc.StartNodePhase(ctx, spanID, nodeID, string(phase), spanOpts...)
 		debugTrace(ctx, "start", &span)
 		node.phase = &span
 	}
