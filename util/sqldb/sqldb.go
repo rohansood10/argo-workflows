@@ -4,18 +4,24 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"time"
 
+	"github.com/XSAM/otelsql"
 	"github.com/upper/db/v4"
 	mysqladp "github.com/upper/db/v4/adapter/mysql"
 	postgresqladp "github.com/upper/db/v4/adapter/postgresql"
+	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/argoproj/argo-workflows/v3/config"
 	"github.com/argoproj/argo-workflows/v3/util"
+
+	// Database drivers - imported for side effects
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
 )
 
-// CreateDBSession creates the DB session and returns the session along with its database type
 func CreateDBSession(ctx context.Context, kubectlConfig kubernetes.Interface, namespace string, dbConfig config.DBConfig) (db.Session, DBType, error) {
 	if dbConfig.PostgreSQL != nil {
 		session, err := createPostGresDBSession(ctx, kubectlConfig, namespace, dbConfig.PostgreSQL, dbConfig.ConnectionPool)
@@ -123,43 +129,80 @@ func createPostGresDBSessionWithAzure(cfg *config.PostgreSQLConfig, persistPool 
 
 // createPostGresDBSessionWithCreds creates postgresDB session with direct credentials
 func createPostGresDBSessionWithCreds(cfg *config.PostgreSQLConfig, persistPool *config.ConnectionPool, username, password string) (db.Session, error) {
-	settings := postgresqladp.ConnectionURL{
-		User:     username,
-		Password: password,
-		Host:     cfg.GetHostname(),
-		Database: cfg.Database,
+	// Build PostgreSQL DSN for lib/pq driver
+	dsn := fmt.Sprintf("postgres://%s:%s@%s/%s",
+		url.QueryEscape(username),
+		url.QueryEscape(password),
+		cfg.GetHostname(),
+		cfg.Database,
+	)
+	if cfg.SSL && cfg.SSLMode != "" {
+		dsn += "?sslmode=" + cfg.SSLMode
+	} else if !cfg.SSL {
+		// When SSL is not configured, explicitly disable it to avoid connection issues
+		dsn += "?sslmode=disable"
 	}
 
-	if cfg.SSL {
-		if cfg.SSLMode != "" {
-			options := map[string]string{
-				"sslmode": cfg.SSLMode,
-			}
-			settings.Options = options
-		}
-	}
-
-	session, err := postgresqladp.Open(settings)
+	// Create traced *sql.DB using otelsql
+	sqlDB, err := otelsql.Open("postgres", dsn,
+		otelsql.WithAttributes(
+			semconv.DBSystemNamePostgreSQL,
+			semconv.DBNamespace(cfg.Database),
+		),
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open traced postgres connection: %w", err)
 	}
+
+	// Wrap with upper/db
+	session, err := postgresqladp.New(sqlDB)
+	if err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("failed to create upper/db session: %w", err)
+	}
+
 	session = ConfigureDBSession(session, persistPool)
 	return session, nil
 }
 
 // createMySQLDBSessionWithCreds creates MySQL DB session with direct credentials
 func createMySQLDBSessionWithCreds(cfg *config.MySQLConfig, persistPool *config.ConnectionPool, username, password string) (db.Session, error) {
-	session, err := mysqladp.Open(mysqladp.ConnectionURL{
-		User:     username,
-		Password: password,
-		Host:     cfg.GetHostname(),
-		Database: cfg.Database,
-		Options:  cfg.Options,
-	})
-	if err != nil {
-		return nil, err
+	// Build MySQL DSN for go-sql-driver/mysql
+	// Format: [username[:password]@][protocol[(address)]]/dbname[?param1=value1&...]
+	dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s",
+		username,
+		password,
+		cfg.GetHostname(),
+		cfg.Database,
+	)
+	// Build query parameters - parseTime is required for proper time.Time scanning
+	params := url.Values{}
+	params.Set("parseTime", "true")
+	for k, v := range cfg.Options {
+		params.Set(k, v)
 	}
+	dsn += "?" + params.Encode()
+
+	// Create traced *sql.DB using otelsql
+	sqlDB, err := otelsql.Open("mysql", dsn,
+		otelsql.WithAttributes(
+			semconv.DBSystemNameMySQL,
+			semconv.DBNamespace(cfg.Database),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open traced mysql connection: %w", err)
+	}
+
+	// Wrap with upper/db
+	session, err := mysqladp.New(sqlDB)
+	if err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("failed to create upper/db session: %w", err)
+	}
+
 	session = ConfigureDBSession(session, persistPool)
+
 	// this is needed to make MySQL run in a Golang-compatible UTF-8 character set.
 	_, err = session.SQL().Exec("SET NAMES 'utf8mb4'")
 	if err != nil {

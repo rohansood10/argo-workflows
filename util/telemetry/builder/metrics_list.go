@@ -1,22 +1,22 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 )
 
-func createMetricsListGo(filename string, metrics *metricsList) {
-	writeMetricsListGo(filename, metrics)
-	goFmtFile(filename)
+func createMetricsListGo(filename string, metrics *metricsList) error {
+	err := writeMetricsListGo(filename, metrics)
+	if err != nil {
+		return err
+	}
+	return goFmtFile(filename)
 }
 
-func writeMetricsListGo(filename string, metrics *metricsList) {
+func writeMetricsListGo(filename string, metrics *metricsList) error {
 	f, err := os.Create(filename)
 	if err != nil {
-		recordError(err)
-		return
+		return err
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "%s\n", generatedBanner)
@@ -50,36 +50,5 @@ func writeMetricsListGo(filename string, metrics *metricsList) {
 
 		fmt.Fprintf(f, "}\n\n")
 	}
-}
-
-func createAttributesGo(filename string, attributes *attributesList) {
-	writeAttributesGo(filename, attributes)
-	goFmtFile(filename)
-}
-
-func writeAttributesGo(filename string, attributes *attributesList) {
-	f, err := os.Create(filename)
-	if err != nil {
-		recordError(err)
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s\n", generatedBanner)
-	fmt.Fprintf(f, "//\n")
-	fmt.Fprintf(f, "//go:generate go run ./builder --attributesGo %s\n", filename)
-	fmt.Fprintf(f, "package telemetry\n\nconst (\n")
-	for _, attrib := range *attributes {
-		fmt.Fprintf(f, "\tAttrib%s string = `%s`\n", attrib.Name, attrib.displayName())
-	}
-	fmt.Fprintf(f, ")\n")
-}
-
-func goFmtFile(filename string) {
-	cmd := exec.Command("go", "fmt", filename)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	_, err := cmd.Output()
-	if err != nil {
-		recordErrorString(fmt.Sprintf("%s: %s", "go fmt failed", stderr.String()))
-	}
+	return nil
 }
