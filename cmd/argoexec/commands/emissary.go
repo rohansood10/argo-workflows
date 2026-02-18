@@ -18,16 +18,15 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/util/retry"
 
-	"github.com/argoproj/argo-workflows/v3/workflow/executor"
-	"github.com/argoproj/argo-workflows/v3/workflow/executor/emissary"
-
+	wfv1 "github.com/argoproj/argo-workflows/v3/pkg/apis/workflow/v1alpha1"
 	"github.com/argoproj/argo-workflows/v3/util/archive"
 	"github.com/argoproj/argo-workflows/v3/util/errors"
 	"github.com/argoproj/argo-workflows/v3/util/logging"
-	"github.com/argoproj/argo-workflows/v3/workflow/executor/osspecific"
-
-	wfv1 "github.com/argoproj/argo-workflows/v3/pkg/apis/workflow/v1alpha1"
 	"github.com/argoproj/argo-workflows/v3/workflow/common"
+	"github.com/argoproj/argo-workflows/v3/workflow/executor"
+	"github.com/argoproj/argo-workflows/v3/workflow/executor/emissary"
+	"github.com/argoproj/argo-workflows/v3/workflow/executor/osspecific"
+	"github.com/argoproj/argo-workflows/v3/workflow/executor/tracing"
 )
 
 var (
@@ -45,6 +44,17 @@ func NewEmissaryCommand() *cobra.Command {
 			exitCode := 64
 			ctx := cmd.Context()
 			logger := logging.RequireLoggerFromContext(ctx)
+			tracer, err := tracing.New(ctx, `argoexec`)
+			if err != nil {
+				logger.WithFatal().WithError(err).Error(ctx, "failed to initialize tracing")
+				return err
+			}
+			defer func() {
+				if err := tracer.Shutdown(context.WithoutCancel(ctx)); err != nil {
+					logger.WithError(err).Error(ctx, "Failed to shutdown tracing")
+				}
+			}()
+			_ = tracer // tracing will be wired in a follow-up change
 
 			defer func() {
 				err := os.WriteFile(varRunArgo+"/ctr/"+containerName+"/exitcode", []byte(strconv.Itoa(exitCode)), 0o644)
